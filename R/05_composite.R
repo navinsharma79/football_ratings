@@ -46,12 +46,25 @@ cli::cli_h1("Loading data")
 
 ratings_raw <- arrow::read_parquet(file.path(PROC_DIR, "adj_ratings_season_v2.parquet"))
 
-# Join play counts from raw aggregations (needed for shrinkage denominators)
-play_counts <- arrow::read_parquet(file.path(PROC_DIR, "raw_team_epa_season.parquet")) |>
-  select(season, team, off_n_plays, def_n_plays, st_n_plays, n_games)
+# Join raw (unadjusted) EPA + play counts from aggregations
+raw_epa <- arrow::read_parquet(file.path(PROC_DIR, "raw_team_epa_season.parquet")) |>
+  select(
+    season, team,
+    # Play counts (needed for shrinkage denominators)
+    off_n_plays, def_n_plays, st_n_plays, n_games,
+    # Raw unadjusted EPA per play
+    off_epa_raw   = off_epa_per_play,
+    off_pass_raw  = off_epa_pass,
+    off_rush_raw  = off_epa_rush,
+    def_epa_raw   = def_epa_per_play,   # already sign-flipped: higher = better defense
+    def_pass_raw  = def_epa_pass,
+    def_rush_raw  = def_epa_rush,
+    st_epa_raw    = st_combined_epa,
+    total_raw     = total_epa
+  )
 
 ratings <- ratings_raw |>
-  left_join(play_counts, by = c("season", "team"))
+  left_join(raw_epa, by = c("season", "team"))
 
 cli::cli_alert_info(
   "Loaded {nrow(ratings)} team-seasons ({min(ratings$season)}–{max(ratings$season)})"

@@ -229,7 +229,8 @@
   </div>
   <div class="controls">
     <div class="tab-group">
-      <button class="tab-btn active" data-mode="descriptive">Descriptive</button>
+      <button class="tab-btn active" data-mode="unadjusted">Unadjusted</button>
+      <button class="tab-btn" data-mode="descriptive">Opp-Adjusted</button>
       <button class="tab-btn" data-mode="predictive">Predictive</button>
     </div>
     <select id="season-select"></select>
@@ -238,7 +239,7 @@
 
 <main>
   <p class="rating-type-desc" id="mode-desc">
-    <strong>Descriptive</strong> — opponent-adjusted EPA for the current season. Best for explaining what happened.
+    <strong>Unadjusted</strong> — raw EPA per play with no schedule adjustment. Highest correlation with actual wins and losses.
   </p>
   <div class="table-wrap">
     <table id="ratings-table">
@@ -256,8 +257,9 @@
 <script>
 const SEASONS = Array.from({length: 2025 - 2010 + 1}, (_, i) => 2025 - i);
 const MODE_DESC = {
-  descriptive: '<strong>Descriptive</strong> — opponent-adjusted EPA for the current season. Best for explaining what happened.',
-  predictive:  '<strong>Predictive</strong> — shrinkage-weighted composite optimized for forecasting next season. Pass offense dominates.'
+  unadjusted:  '<strong>Unadjusted</strong> — raw EPA per play with no schedule adjustment. Highest correlation with actual wins and losses.',
+  descriptive: '<strong>Opponent-Adjusted</strong> — simultaneous fixed-effects regression removes schedule strength. Best for comparing teams across different schedules.',
+  predictive:  '<strong>Predictive</strong> — shrinkage-weighted composite optimized for forecasting next season. Pass offense dominates due to QB continuity.'
 };
 
 const COLUMNS = [
@@ -277,7 +279,7 @@ const COLUMNS = [
 let currentData = [];
 let sortCol = 'rank';
 let sortAsc = true;
-let mode = 'descriptive';
+let mode = 'unadjusted';
 
 function fmtEpa(v) {
   if (v === null || v === undefined || isNaN(v)) return '—';
@@ -300,7 +302,7 @@ function epaColor(v) {
 
 function buildHeader() {
   const head = document.getElementById('table-head');
-  const totalLabel = mode === 'descriptive' ? 'Descriptive' : 'Predictive';
+  const totalLabel = { unadjusted: 'Raw Total', descriptive: 'Adj Total', predictive: 'Predictive' }[mode];
 
   const cols = COLUMNS.map(c => {
     let label = c.label;
@@ -357,18 +359,24 @@ function loadSeason(season) {
         const wins   = r.wins   ?? Math.round((r.win_pct ?? 0) * (r.games ?? r.n_games ?? 17));
         const games  = r.games  ?? r.n_games ?? 17;
         const losses = games - wins;
+
+        const isRaw  = mode === 'unadjusted';
+        const isPred = mode === 'predictive';
+
         return {
-          rank:         mode === 'descriptive' ? r.rank_descriptive : r.rank_predictive,
+          rank:         isPred ? r.rank_predictive : r.rank_descriptive,
           team:         r.team,
           record:       `${wins}-${losses}`,
-          total:        mode === 'descriptive' ? r.total_descriptive : r.total_predictive,
-          off_adj_epa:  r.off_adj_epa,
-          off_adj_pass: r.off_adj_pass,
-          off_adj_rush: r.off_adj_rush,
-          def_adj_epa:  r.def_adj_epa,
-          def_adj_pass: r.def_adj_pass,
-          def_adj_rush: r.def_adj_rush,
-          st_adj_epa:   r.st_adj_epa,
+          total:        isRaw  ? r.total_raw
+                      : isPred ? r.total_predictive
+                      :          r.total_descriptive,
+          off_adj_epa:  isRaw ? r.off_epa_raw  : r.off_adj_epa,
+          off_adj_pass: isRaw ? r.off_pass_raw : r.off_adj_pass,
+          off_adj_rush: isRaw ? r.off_rush_raw : r.off_adj_rush,
+          def_adj_epa:  isRaw ? r.def_epa_raw  : r.def_adj_epa,
+          def_adj_pass: isRaw ? r.def_pass_raw : r.def_adj_pass,
+          def_adj_rush: isRaw ? r.def_rush_raw : r.def_adj_rush,
+          st_adj_epa:   isRaw ? r.st_epa_raw   : r.st_adj_epa,
         };
       });
       sortCol = 'rank';
