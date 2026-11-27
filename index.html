@@ -364,7 +364,9 @@ function loadSeason(season) {
         const isPred = mode === 'predictive';
 
         return {
-          rank:         isPred ? r.rank_predictive : r.rank_descriptive,
+          rank:         isRaw  ? r.rank_unadjusted
+                      : isPred ? r.rank_predictive
+                      :          r.rank_descriptive,
           team:         r.team,
           record:       `${wins}-${losses}`,
           total:        isRaw  ? r.total_raw

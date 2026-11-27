@@ -263,8 +263,12 @@ cli::cli_alert_info(
 
 final_ratings <- ratings_shrunk |>
   mutate(
+    # Unadjusted: raw EPA, no opponent adjustment
+    # (highest correlation with actual W-L record)
+    total_unadjusted = off_epa_raw + def_epa_raw + 0.5 * coalesce(st_epa_raw, 0),
+
     # Descriptive: opponent-adjusted EPA, no shrinkage
-    # (best for explaining current season results)
+    # (best for explaining current season results net of schedule)
     total_descriptive = off_adj_epa + def_adj_epa + 0.5 * coalesce(st_adj_epa, 0),
 
     # Predictive: optimized weights + shrinkage
@@ -276,6 +280,7 @@ final_ratings <- ratings_shrunk |>
   ) |>
   group_by(season) |>
   mutate(
+    rank_unadjusted  = rank(-total_unadjusted,  ties.method = "min"),
     rank_descriptive = rank(-total_descriptive, ties.method = "min"),
     rank_predictive  = rank(-total_predictive,  ties.method = "min")
   ) |>
