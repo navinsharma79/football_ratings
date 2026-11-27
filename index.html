@@ -261,17 +261,17 @@ const MODE_DESC = {
 };
 
 const COLUMNS = [
-  { key: 'rank',             label: '#',          fmt: v => v,                     cls: 'rank-cell',  group: '' },
-  { key: 'team',             label: 'Team',        fmt: v => v,                     cls: 'team-cell',  group: '' },
-  { key: 'win_pct',          label: 'W%',          fmt: v => (v * 100).toFixed(1) + '%', cls: 'win-cell', group: '' },
-  { key: 'off_adj_pass',     label: 'Pass Off',    fmt: fmtEpa,                     cls: 'epa-cell',   group: 'off' },
-  { key: 'off_adj_rush',     label: 'Rush Off',    fmt: fmtEpa,                     cls: 'epa-cell',   group: 'off' },
-  { key: 'def_adj_epa',      label: 'Def Total',   fmt: fmtEpa,                     cls: 'epa-cell',   group: 'def' },
-  { key: 'def_adj_pass',     label: 'Pass Def',    fmt: fmtEpa,                     cls: 'epa-cell',   group: 'def' },
-  { key: 'def_adj_rush',     label: 'Rush Def',    fmt: fmtEpa,                     cls: 'epa-cell',   group: 'def' },
-  { key: 'st_adj_epa',       label: 'Spec Teams',  fmt: fmtEpa,                     cls: 'epa-cell',   group: 'st'  },
-  { key: 'total',            label: 'Total',       fmt: fmtEpa,                     cls: 'total-cell', group: 'tot' },
-  { key: 'rank_other',       label: 'Alt Rank',    fmt: v => v,                     cls: 'rank-cell',  group: '' },
+  { key: 'rank',             label: '#',           fmt: v => v,     cls: 'rank-cell',  group: '' },
+  { key: 'team',             label: 'Team',         fmt: v => v,     cls: 'team-cell',  group: '' },
+  { key: 'record',           label: 'W-L',          fmt: v => v,     cls: 'win-cell',   group: '' },
+  { key: 'total',            label: 'Total',        fmt: fmtEpa,     cls: 'total-cell', group: 'tot' },
+  { key: 'off_adj_epa',      label: 'Off Total',    fmt: fmtEpa,     cls: 'epa-cell',   group: 'off' },
+  { key: 'off_adj_pass',     label: 'Pass Off',     fmt: fmtEpa,     cls: 'epa-cell',   group: 'off' },
+  { key: 'off_adj_rush',     label: 'Rush Off',     fmt: fmtEpa,     cls: 'epa-cell',   group: 'off' },
+  { key: 'def_adj_epa',      label: 'Def Total',    fmt: fmtEpa,     cls: 'epa-cell',   group: 'def' },
+  { key: 'def_adj_pass',     label: 'Pass Def',     fmt: fmtEpa,     cls: 'epa-cell',   group: 'def' },
+  { key: 'def_adj_rush',     label: 'Rush Def',     fmt: fmtEpa,     cls: 'epa-cell',   group: 'def' },
+  { key: 'st_adj_epa',       label: 'Spec Teams',   fmt: fmtEpa,     cls: 'epa-cell',   group: 'st'  },
 ];
 
 let currentData = [];
@@ -300,14 +300,11 @@ function epaColor(v) {
 
 function buildHeader() {
   const head = document.getElementById('table-head');
-  const rankLabel   = mode === 'descriptive' ? 'Rank' : 'Rank';
-  const totalLabel  = mode === 'descriptive' ? 'Descriptive' : 'Predictive';
-  const altLabel    = mode === 'descriptive' ? 'Pred Rank' : 'Desc Rank';
+  const totalLabel = mode === 'descriptive' ? 'Descriptive' : 'Predictive';
 
   const cols = COLUMNS.map(c => {
     let label = c.label;
-    if (c.key === 'total')      label = totalLabel;
-    if (c.key === 'rank_other') label = altLabel;
+    if (c.key === 'total') label = totalLabel;
     return { ...c, label };
   });
 
@@ -320,7 +317,7 @@ function buildHeader() {
     th.addEventListener('click', () => {
       const col = th.dataset.col;
       if (sortCol === col) sortAsc = !sortAsc;
-      else { sortCol = col; sortAsc = col === 'rank' || col === 'rank_other'; }
+      else { sortCol = col; sortAsc = col === 'rank'; }
       renderTable();
     });
   });
@@ -341,7 +338,7 @@ function renderTable() {
     return `<tr>${COLUMNS.map(c => {
       let val = row[c.key];
       let style = '';
-      if (['off_adj_pass','off_adj_rush','def_adj_epa','def_adj_pass','def_adj_rush','st_adj_epa','total'].includes(c.key)) {
+      if (['total','off_adj_epa','off_adj_pass','off_adj_rush','def_adj_epa','def_adj_pass','def_adj_rush','st_adj_epa'].includes(c.key)) {
         style = epaColor(val);
       }
       return `<td class="${c.cls}" style="${style}">${c.fmt(val)}</td>`;
@@ -356,19 +353,24 @@ function loadSeason(season) {
     header: true,
     dynamicTyping: true,
     complete(results) {
-      currentData = results.data.filter(r => r.team).map(r => ({
-        rank:       mode === 'descriptive' ? r.rank_descriptive : r.rank_predictive,
-        team:       r.team,
-        win_pct:    r.win_pct,
-        off_adj_pass: r.off_adj_pass,
-        off_adj_rush: r.off_adj_rush,
-        def_adj_epa:  r.def_adj_epa,
-        def_adj_pass: r.def_adj_pass,
-        def_adj_rush: r.def_adj_rush,
-        st_adj_epa:   r.st_adj_epa,
-        total:        mode === 'descriptive' ? r.total_descriptive : r.total_predictive,
-        rank_other:   mode === 'descriptive' ? r.rank_predictive   : r.rank_descriptive,
-      }));
+      currentData = results.data.filter(r => r.team).map(r => {
+        const wins   = r.wins   ?? Math.round((r.win_pct ?? 0) * (r.games ?? r.n_games ?? 17));
+        const games  = r.games  ?? r.n_games ?? 17;
+        const losses = games - wins;
+        return {
+          rank:         mode === 'descriptive' ? r.rank_descriptive : r.rank_predictive,
+          team:         r.team,
+          record:       `${wins}-${losses}`,
+          total:        mode === 'descriptive' ? r.total_descriptive : r.total_predictive,
+          off_adj_epa:  r.off_adj_epa,
+          off_adj_pass: r.off_adj_pass,
+          off_adj_rush: r.off_adj_rush,
+          def_adj_epa:  r.def_adj_epa,
+          def_adj_pass: r.def_adj_pass,
+          def_adj_rush: r.def_adj_rush,
+          st_adj_epa:   r.st_adj_epa,
+        };
+      });
       sortCol = 'rank';
       sortAsc = true;
       renderTable();
