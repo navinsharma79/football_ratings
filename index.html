@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NFL Team Ratings</title>
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #0f1117;
+      color: #e2e8f0;
+      min-height: 100vh;
+    }
+
+    header {
+      background: #1a1d27;
+      border-bottom: 1px solid #2d3148;
+      padding: 20px 32px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 16px;
+    }
+
+    .header-left h1 {
+      font-size: 1.4rem;
+      font-weight: 700;
+      color: #f0f4ff;
+      letter-spacing: -0.02em;
+    }
+
+    .header-left p {
+      font-size: 0.8rem;
+      color: #6b7694;
+      margin-top: 2px;
+    }
+
+    .controls {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .tab-group {
+      display: flex;
+      background: #252836;
+      border-radius: 8px;
+      padding: 3px;
+      gap: 2px;
+    }
+
+    .tab-btn {
+      background: none;
+      border: none;
+      color: #6b7694;
+      font-size: 0.8rem;
+      font-weight: 500;
+      padding: 6px 14px;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .tab-btn.active {
+      background: #3b4bdb;
+      color: #fff;
+    }
+
+    .tab-btn:hover:not(.active) {
+      color: #c0c8f0;
+    }
+
+    select {
+      background: #252836;
+      border: 1px solid #2d3148;
+      color: #e2e8f0;
+      font-size: 0.85rem;
+      padding: 7px 32px 7px 12px;
+      border-radius: 8px;
+      cursor: pointer;
+      appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%236b7694' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 10px center;
+    }
+
+    select:focus { outline: none; border-color: #3b4bdb; }
+
+    main { padding: 24px 32px; }
+
+    .rating-type-desc {
+      font-size: 0.78rem;
+      color: #6b7694;
+      margin-bottom: 16px;
+      line-height: 1.5;
+    }
+
+    .table-wrap {
+      overflow-x: auto;
+      border-radius: 10px;
+      border: 1px solid #2d3148;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.83rem;
+    }
+
+    thead th {
+      background: #1a1d27;
+      color: #8891b8;
+      font-weight: 600;
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      padding: 10px 14px;
+      text-align: right;
+      white-space: nowrap;
+      cursor: pointer;
+      user-select: none;
+      border-bottom: 1px solid #2d3148;
+      position: sticky;
+      top: 0;
+    }
+
+    thead th:first-child,
+    thead th:nth-child(2) { text-align: left; }
+
+    thead th:hover { color: #c0c8f0; }
+
+    thead th.sort-asc::after  { content: " ↑"; color: #3b4bdb; }
+    thead th.sort-desc::after { content: " ↓"; color: #3b4bdb; }
+
+    tbody tr {
+      border-bottom: 1px solid #1e2130;
+      transition: background 0.1s;
+    }
+
+    tbody tr:last-child { border-bottom: none; }
+    tbody tr:hover { background: #1e2234; }
+
+    td {
+      padding: 10px 14px;
+      text-align: right;
+      white-space: nowrap;
+      color: #c8d0ea;
+    }
+
+    td:first-child { text-align: left; }
+    td:nth-child(2) { text-align: left; }
+
+    .rank-cell {
+      color: #6b7694;
+      font-size: 0.75rem;
+      font-weight: 600;
+      width: 36px;
+    }
+
+    .team-cell {
+      font-weight: 700;
+      color: #f0f4ff;
+      letter-spacing: 0.03em;
+    }
+
+    .win-cell { color: #94a3b8; }
+
+    .epa-cell {
+      font-variant-numeric: tabular-nums;
+      font-weight: 500;
+    }
+
+    .total-cell {
+      font-weight: 700;
+      font-size: 0.88rem;
+    }
+
+    /* Color scale applied via inline style */
+    .col-group-off th  { border-top: 2px solid #2563eb44; }
+    .col-group-def th  { border-top: 2px solid #dc262644; }
+    .col-group-st th   { border-top: 2px solid #d9770644; }
+    .col-group-tot th  { border-top: 2px solid #16a34a44; }
+
+    .legend {
+      display: flex;
+      gap: 20px;
+      margin-top: 16px;
+      flex-wrap: wrap;
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.75rem;
+      color: #6b7694;
+    }
+
+    .legend-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 2px;
+    }
+
+    #status {
+      color: #6b7694;
+      font-size: 0.82rem;
+      padding: 40px;
+      text-align: center;
+    }
+
+    @media (max-width: 600px) {
+      header { padding: 16px; }
+      main { padding: 16px; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="header-left">
+    <h1>NFL Team Ratings</h1>
+    <p>Opponent-adjusted EPA · 2010–2025 · <a href="https://github.com/navinsharma79/football_ratings" style="color:#3b4bdb;text-decoration:none;">GitHub</a></p>
+  </div>
+  <div class="controls">
+    <div class="tab-group">
+      <button class="tab-btn active" data-mode="descriptive">Descriptive</button>
+      <button class="tab-btn" data-mode="predictive">Predictive</button>
+    </div>
+    <select id="season-select"></select>
+  </div>
+</header>
+
+<main>
+  <p class="rating-type-desc" id="mode-desc">
+    <strong>Descriptive</strong> — opponent-adjusted EPA for the current season. Best for explaining what happened.
+  </p>
+  <div class="table-wrap">
+    <table id="ratings-table">
+      <thead id="table-head"></thead>
+      <tbody id="table-body"><tr><td colspan="10" id="status">Loading…</td></tr></tbody>
+    </table>
+  </div>
+  <div class="legend">
+    <div class="legend-item"><div class="legend-dot" style="background:#22c55e"></div> Positive EPA (above avg)</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#ef4444"></div> Negative EPA (below avg)</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#94a3b8"></div> Near zero</div>
+  </div>
+</main>
+
+<script>
+const SEASONS = Array.from({length: 2025 - 2010 + 1}, (_, i) => 2025 - i);
+const MODE_DESC = {
+  descriptive: '<strong>Descriptive</strong> — opponent-adjusted EPA for the current season. Best for explaining what happened.',
+  predictive:  '<strong>Predictive</strong> — shrinkage-weighted composite optimized for forecasting next season. Pass offense dominates.'
+};
+
+const COLUMNS = [
+  { key: 'rank',             label: '#',          fmt: v => v,                     cls: 'rank-cell',  group: '' },
+  { key: 'team',             label: 'Team',        fmt: v => v,                     cls: 'team-cell',  group: '' },
+  { key: 'win_pct',          label: 'W%',          fmt: v => (v * 100).toFixed(1) + '%', cls: 'win-cell', group: '' },
+  { key: 'off_adj_pass',     label: 'Pass Off',    fmt: fmtEpa,                     cls: 'epa-cell',   group: 'off' },
+  { key: 'off_adj_rush',     label: 'Rush Off',    fmt: fmtEpa,                     cls: 'epa-cell',   group: 'off' },
+  { key: 'def_adj_epa',      label: 'Defense',     fmt: fmtEpa,                     cls: 'epa-cell',   group: 'def' },
+  { key: 'st_adj_epa',       label: 'Spec Teams',  fmt: fmtEpa,                     cls: 'epa-cell',   group: 'st'  },
+  { key: 'total',            label: 'Total',       fmt: fmtEpa,                     cls: 'total-cell', group: 'tot' },
+  { key: 'rank_other',       label: 'Alt Rank',    fmt: v => v,                     cls: 'rank-cell',  group: '' },
+];
+
+let currentData = [];
+let sortCol = 'rank';
+let sortAsc = true;
+let mode = 'descriptive';
+
+function fmtEpa(v) {
+  if (v === null || v === undefined || isNaN(v)) return '—';
+  return (v >= 0 ? '+' : '') + Number(v).toFixed(3);
+}
+
+function epaColor(v) {
+  if (v === null || isNaN(v)) return '';
+  const clamped = Math.max(-0.15, Math.min(0.15, v));
+  const t = (clamped + 0.15) / 0.30; // 0 = red, 1 = green
+  if (t > 0.52) {
+    const g = Math.round(80 + (t - 0.52) / 0.48 * 100);
+    return `color: rgb(60,${g + 80},80)`;
+  } else if (t < 0.48) {
+    const r = Math.round(140 + (0.48 - t) / 0.48 * 95);
+    return `color: rgb(${r},60,70)`;
+  }
+  return 'color: #94a3b8';
+}
+
+function buildHeader() {
+  const head = document.getElementById('table-head');
+  const rankLabel   = mode === 'descriptive' ? 'Rank' : 'Rank';
+  const totalLabel  = mode === 'descriptive' ? 'Descriptive' : 'Predictive';
+  const altLabel    = mode === 'descriptive' ? 'Pred Rank' : 'Desc Rank';
+
+  const cols = COLUMNS.map(c => {
+    let label = c.label;
+    if (c.key === 'total')      label = totalLabel;
+    if (c.key === 'rank_other') label = altLabel;
+    return { ...c, label };
+  });
+
+  head.innerHTML = `<tr>${cols.map(c => {
+    const cls = sortCol === c.key ? (sortAsc ? 'sort-asc' : 'sort-desc') : '';
+    return `<th class="${cls}" data-col="${c.key}">${c.label}</th>`;
+  }).join('')}</tr>`;
+
+  head.querySelectorAll('th').forEach(th => {
+    th.addEventListener('click', () => {
+      const col = th.dataset.col;
+      if (sortCol === col) sortAsc = !sortAsc;
+      else { sortCol = col; sortAsc = col === 'rank' || col === 'rank_other'; }
+      renderTable();
+    });
+  });
+}
+
+function renderTable() {
+  buildHeader();
+  const tbody = document.getElementById('table-body');
+
+  const sorted = [...currentData].sort((a, b) => {
+    let av = a[sortCol], bv = b[sortCol];
+    if (av === null || av === undefined) return 1;
+    if (bv === null || bv === undefined) return -1;
+    return sortAsc ? av - bv : bv - av;
+  });
+
+  tbody.innerHTML = sorted.map(row => {
+    return `<tr>${COLUMNS.map(c => {
+      let val = row[c.key];
+      let style = '';
+      if (['off_adj_pass','off_adj_rush','def_adj_epa','st_adj_epa','total'].includes(c.key)) {
+        style = epaColor(val);
+      }
+      return `<td class="${c.cls}" style="${style}">${c.fmt(val)}</td>`;
+    }).join('')}</tr>`;
+  }).join('');
+}
+
+function loadSeason(season) {
+  document.getElementById('table-body').innerHTML = '<tr><td colspan="10" id="status">Loading…</td></tr>';
+  Papa.parse(`output/ratings/ratings_${season}.csv`, {
+    download: true,
+    header: true,
+    dynamicTyping: true,
+    complete(results) {
+      currentData = results.data.filter(r => r.team).map(r => ({
+        rank:       mode === 'descriptive' ? r.rank_descriptive : r.rank_predictive,
+        team:       r.team,
+        win_pct:    r.win_pct,
+        off_adj_pass: r.off_adj_pass,
+        off_adj_rush: r.off_adj_rush,
+        def_adj_epa:  r.def_adj_epa,
+        st_adj_epa:   r.st_adj_epa,
+        total:        mode === 'descriptive' ? r.total_descriptive : r.total_predictive,
+        rank_other:   mode === 'descriptive' ? r.rank_predictive   : r.rank_descriptive,
+      }));
+      sortCol = 'rank';
+      sortAsc = true;
+      renderTable();
+    },
+    error() {
+      document.getElementById('table-body').innerHTML =
+        `<tr><td colspan="10" id="status">Could not load ratings for ${season}.</td></tr>`;
+    }
+  });
+}
+
+// Season dropdown
+const sel = document.getElementById('season-select');
+SEASONS.forEach(s => {
+  const opt = document.createElement('option');
+  opt.value = s;
+  opt.textContent = s + ' season';
+  sel.appendChild(opt);
+});
+sel.addEventListener('change', () => loadSeason(sel.value));
+
+// Mode tabs
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    mode = btn.dataset.mode;
+    document.getElementById('mode-desc').innerHTML = MODE_DESC[mode];
+    loadSeason(sel.value);
+  });
+});
+
+// Initial load
+loadSeason(2025);
+</script>
+</body>
+</html>
