@@ -409,22 +409,30 @@ cli::cli_h1("4. Return ratings")
 # =============================================================================
 # Punt opponent adjustment: asymmetric two-stage approach
 #
-# Coverage model (all plays, including fair catches / downed / OOB):
-#   feols(epa ~ is_home | posteam + defteam)
-#   defteam FE = coverage quality INCLUDING credit for forcing fair catches.
-#   Fair catch = coverage team won the field-position battle through hang time
-#   and speed; the kicking team deserves that credit.
+# nflfastR convention on punt plays:
+#   posteam = PUNTING/COVERAGE team (they have possession before the punt)
+#   defteam = RETURN team (they receive and return the punt)
+#   epa     = from posteam (punting team) perspective
 #
-# Return quality (live returns only, return_yards > 0):
-#   Two-stage: adjust each play's EPA by coverage team's FE from the all-plays
-#   model, then mean the adjusted EPA by posteam.
-#   Return teams facing great coverage teams get an upward adjustment —
-#   they are not penalized for fair catches, and they get credit for even
-#   returning against a team that forces high fair-catch rates.
+# Coverage quality (by posteam):
+#   feols on ALL plays including fair catches / downed / OOB
+#   posteam FE = coverage quality, positive = good
+#   Fair catches are credited automatically: pinning the return team deep via
+#   hang time and coverage speed = high EPA for the punting team = high FE
+#
+# Return quality (by defteam, two-stage):
+#   Live returns only (return_yards > 0; excludes fair catches)
+#   Per play: ret_quality = -epa + coverage_FE[posteam]
+#     -epa      : negate so good return (low punting-team EPA) = positive
+#     +cov_FE   : add coverage quality so return teams facing great coverage
+#                 get upward credit (they are not penalized for fair catches
+#                 forced by great coverage, and they get rewarded for
+#                 returning despite great coverage)
+#   Then mean(ret_quality) by defteam, positive = good return unit
 #
 # Ridge shrinkage:
-#   k=20 for coverage (~65-80 plays/team → ~76% retention)
-#   k=10 for returns  (~22-30 plays/team → ~68% retention)
+#   k=20 for coverage (~65-80 plays/team)
+#   k=10 for returns  (~22-30 live returns/team)
 # =============================================================================
 
 K_RIDGE_PR_COV <- 20L
@@ -437,7 +445,8 @@ pr_plays <- pbp |>
     coalesce(punt_blocked, 0) == 0
   )
 
-# --- Coverage: feols on ALL punt plays (live returns + fair catches + downed/OOB) ---
+# --- Coverage: feols on ALL punt plays ---
+# posteam FE = coverage team quality, positive = good, feols-centered around 0
 pr_cov_adj <- map_dfr(sort(unique(pr_plays$season)), function(szn) {
   dat <- pr_plays |>
     filter(season == szn) |>
@@ -453,10 +462,9 @@ pr_cov_adj <- map_dfr(sort(unique(pr_plays$season)), function(szn) {
     error = function(e) NULL
   )
 
-  cov_fe <- fe_tibble(mod, "defteam", "pr_cov_raw") |>
-    mutate(pr_cov_adj = -pr_cov_raw) |> select(-pr_cov_raw)
+  cov_fe <- fe_tibble(mod, "posteam", "pr_cov_adj")   # posteam = coverage team
 
-  cov_counts <- dat |> group_by(team = defteam) |> summarise(n = n(), .groups = "drop")
+  cov_counts <- dat |> group_by(team = posteam) |> summarise(n = n(), .groups = "drop")
 
   cov_fe |>
     left_join(cov_counts, by = "team") |>
@@ -467,25 +475,25 @@ pr_cov_adj <- map_dfr(sort(unique(pr_plays$season)), function(szn) {
     select(-n)
 })
 
-# --- Return quality: live returns only, adjusted for coverage team quality ---
-# pr_cov_adj > 0 means coverage team suppressed EPA. Subtracting the coverage
-# team's (negative-convention) FE is equivalent to: epa_adj = epa + pr_cov_adj.
-# A return team facing a great coverage unit gets an upward adjustment.
+# --- Return quality: live returns only, adjusted for coverage quality faced ---
+# ret_quality = -epa + coverage_FE[posteam]
+#   Return team gets credit for facing great coverage and still returning.
+#   Metric is positive = good return unit, centered near 0.
 pr_ret_adj <- map_dfr(sort(unique(pr_plays$season)), function(szn) {
   szn_cov <- pr_cov_adj |> filter(season == szn) |> select(team, pr_cov_adj)
 
   dat <- pr_plays |>
-    filter(season == szn, return_yards > 0) |>   # live returns only
-    left_join(szn_cov, by = c("defteam" = "team")) |>
-    mutate(epa_adj = epa + coalesce(pr_cov_adj, 0))
+    filter(season == szn, return_yards > 0) |>         # live returns only
+    left_join(szn_cov, by = c("posteam" = "team")) |>  # join by POSTEAM (coverage team)
+    mutate(ret_quality = -epa + coalesce(pr_cov_adj, 0))
 
   if (nrow(dat) < 10) {
     return(tibble(season = szn, team = character(), pr_ret_adj = numeric()))
   }
 
   dat |>
-    group_by(team = posteam) |>
-    summarise(pr_ret_adj = mean(epa_adj, na.rm = TRUE), n_ret = n(), .groups = "drop") |>
+    group_by(team = defteam) |>                        # defteam = return team
+    summarise(pr_ret_adj = mean(ret_quality, na.rm = TRUE), n_ret = n(), .groups = "drop") |>
     mutate(
       pr_ret_adj = pr_ret_adj * n_ret / (n_ret + K_RIDGE_PR_RET),
       season = szn
