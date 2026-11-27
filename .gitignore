@@ -1,0 +1,19 @@
+# R
+.Rproj.user/
+.Rhistory
+.RData
+.Renviron
+
+# Data — raw downloads are large; don't commit them
+data/raw/
+data/processed/
+
+# Output ratings are committed (small CSVs)
+!output/ratings/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude Code memory
+.claude/
