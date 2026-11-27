@@ -265,7 +265,7 @@ cli::cli_alert_info("Seasons covered: {paste(range(clean_all_seasons$season), co
 
 # Join roof/surface from schedules (some seasons have it on the play, others don't)
 schedules_mini <- arrow::read_parquet(schedules_path) |>
-  select(game_id, roof_sched = roof, surface_sched = surface, location)
+  select(game_id, game_type, roof_sched = roof, surface_sched = surface, location)
 
 clean_all_seasons <- clean_all_seasons |>
   left_join(schedules_mini, by = "game_id") |>

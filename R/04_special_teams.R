@@ -35,6 +35,9 @@ PROJ_ROOT  <- "//wsl.localhost/FedoraLinux-44/home/navin/football_ratings"
 setwd(PROJ_ROOT)
 PROC_DIR   <- file.path(PROJ_ROOT, "data", "processed")
 
+INCLUDE_PLAYOFFS <- Sys.getenv("INCLUDE_PLAYOFFS", unset = "FALSE") == "TRUE"
+VALID_GAME_TYPES <- if (INCLUDE_PLAYOFFS) c("REG","WC","DIV","CON","SB") else "REG"
+
 # =============================================================================
 # Kickoff rule history lookup
 # Used to price the value of a touchback by season, and to flag era changes
@@ -78,11 +81,13 @@ print(TOUCHBACK_YARDLINE)
 # =============================================================================
 
 cli::cli_h1("Loading data")
+cli::cli_alert_info("INCLUDE_PLAYOFFS = {INCLUDE_PLAYOFFS}")
 
-pbp <- arrow::read_parquet(file.path(PROC_DIR, "pbp_clean.parquet"))
+pbp <- arrow::read_parquet(file.path(PROC_DIR, "pbp_clean.parquet")) |>
+  filter(game_type %in% VALID_GAME_TYPES)
 adj <- arrow::read_parquet(file.path(PROC_DIR, "adj_ratings_season.parquet"))
 
-cli::cli_alert_info("Loaded {nrow(pbp)} plays")
+cli::cli_alert_info("Loaded {nrow(pbp)} plays ({if (INCLUDE_PLAYOFFS) 'REG + playoffs' else 'REG only'})")
 
 # =============================================================================
 # 1. Field Goal Model

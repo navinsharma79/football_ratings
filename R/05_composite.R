@@ -32,7 +32,10 @@ library(glue)
 PROJ_ROOT  <- "//wsl.localhost/FedoraLinux-44/home/navin/football_ratings"
 setwd(PROJ_ROOT)
 PROC_DIR   <- file.path(PROJ_ROOT, "data", "processed")
-OUTPUT_DIR <- file.path(PROJ_ROOT, "output", "ratings")
+
+INCLUDE_PLAYOFFS <- Sys.getenv("INCLUDE_PLAYOFFS", unset = "FALSE") == "TRUE"
+OUTPUT_DIR <- file.path(PROJ_ROOT, "output",
+                        if (INCLUDE_PLAYOFFS) "ratings/with_playoffs" else "ratings")
 dir.create(OUTPUT_DIR, showWarnings = FALSE, recursive = TRUE)
 
 TRAIN_SEASONS <- 2010:2020

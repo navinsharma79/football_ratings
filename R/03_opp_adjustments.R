@@ -46,6 +46,9 @@ dir.create(OUTPUT_DIR, showWarnings = FALSE, recursive = TRUE)
 
 SEASONS_ALL <- 2010:2025
 
+INCLUDE_PLAYOFFS <- Sys.getenv("INCLUDE_PLAYOFFS", unset = "FALSE") == "TRUE"
+VALID_GAME_TYPES <- if (INCLUDE_PLAYOFFS) c("REG","WC","DIV","CON","SB") else "REG"
+
 # =============================================================================
 # Ridge shrinkage constants
 # k = half-shrinkage point (plays at which shrinkage factor = 0.5)
@@ -64,13 +67,16 @@ K_RIDGE_ST   <-  30L
 # =============================================================================
 
 cli::cli_h1("Loading data")
+cli::cli_alert_info("INCLUDE_PLAYOFFS = {INCLUDE_PLAYOFFS}")
 
-pbp <- arrow::read_parquet(file.path(PROC_DIR, "pbp_clean.parquet"))
+pbp <- arrow::read_parquet(file.path(PROC_DIR, "pbp_clean.parquet")) |>
+  filter(game_type %in% VALID_GAME_TYPES)
 
+# Win % always uses regular season for validation consistency
 schedules <- arrow::read_parquet(file.path(PROJ_ROOT, "data", "raw", "schedules.parquet")) |>
   filter(game_type == "REG")
 
-cli::cli_alert_info("Loaded {nrow(pbp)} plays")
+cli::cli_alert_info("Loaded {nrow(pbp)} plays ({if (INCLUDE_PLAYOFFS) 'REG + playoffs' else 'REG only'})")
 
 # =============================================================================
 # Helpers

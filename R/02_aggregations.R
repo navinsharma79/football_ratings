@@ -19,13 +19,21 @@ setwd(PROJ_ROOT)
 
 PROC_DIR <- file.path(PROJ_ROOT, "data", "processed")
 
+# INCLUDE_PLAYOFFS: set via environment variable, e.g. INCLUDE_PLAYOFFS=TRUE Rscript ...
+# FALSE (default) = regular season only
+# TRUE            = regular season + all playoff rounds (WC, DIV, CON, SB)
+INCLUDE_PLAYOFFS  <- Sys.getenv("INCLUDE_PLAYOFFS", unset = "FALSE") == "TRUE"
+VALID_GAME_TYPES  <- if (INCLUDE_PLAYOFFS) c("REG","WC","DIV","CON","SB") else "REG"
+
 # =============================================================================
 # Load clean play-by-play
 # =============================================================================
 
 cli::cli_h1("Loading clean play-by-play")
+cli::cli_alert_info("INCLUDE_PLAYOFFS = {INCLUDE_PLAYOFFS}")
 
-pbp <- arrow::read_parquet(file.path(PROC_DIR, "pbp_clean.parquet"))
+pbp <- arrow::read_parquet(file.path(PROC_DIR, "pbp_clean.parquet")) |>
+  filter(game_type %in% VALID_GAME_TYPES)
 schedules <- arrow::read_parquet(file.path(PROJ_ROOT, "data", "raw", "schedules.parquet"))
 
 cli::cli_alert_info("Loaded {nrow(pbp)} plays across seasons {min(pbp$season)}–{max(pbp$season)}")
@@ -139,7 +147,7 @@ cli::cli_h1("Building combined weekly team ratings")
 # Get game metadata (opponent, home/away) from schedules
 # Build two rows per game (one per team) before pivoting away home/away columns
 game_meta_base <- schedules |>
-  filter(game_type == "REG") |>
+  filter(game_type %in% VALID_GAME_TYPES) |>
   select(game_id, season, week, home_team, away_team)
 
 game_meta <- bind_rows(
