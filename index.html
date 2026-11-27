@@ -263,7 +263,7 @@ const MODE_DESC = {
 };
 
 const COLUMNS = [
-  { key: 'rank',             label: '#',           fmt: v => v,     cls: 'rank-cell',  group: '' },
+  { key: 'rank',             label: '#',           fmt: v => v ?? '—', cls: 'rank-cell',  group: '' },
   { key: 'team',             label: 'Team',         fmt: v => v,     cls: 'team-cell',  group: '' },
   { key: 'record',           label: 'W-L',          fmt: v => v,     cls: 'win-cell',   group: '' },
   { key: 'total',            label: 'Total',        fmt: fmtEpa,     cls: 'total-cell', group: 'tot' },
@@ -350,7 +350,7 @@ function renderTable() {
 
 function loadSeason(season) {
   document.getElementById('table-body').innerHTML = '<tr><td colspan="10" id="status">Loading…</td></tr>';
-  Papa.parse(`output/ratings/ratings_${season}.csv`, {
+  Papa.parse(`output/ratings/ratings_${season}.csv?v=${Date.now()}`, {
     download: true,
     header: true,
     dynamicTyping: true,
