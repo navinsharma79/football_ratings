@@ -29,6 +29,7 @@ library(arrow)
 library(cli)
 library(glue)
 library(broom)
+library(fixest)
 
 PROJ_ROOT  <- "//wsl.localhost/FedoraLinux-44/home/navin/football_ratings"
 setwd(PROJ_ROOT)
@@ -314,44 +315,75 @@ ko_placement_new |>
   mutate(across(where(is.numeric), \(x) round(x, 3))) |>
   print(n = Inf)
 
-# Coverage ratings: how well does the kicking team limit return EPA?
-# Split by era — coverage is more meaningful post-2024 (new formation)
-ko_coverage_old <- ko_plays |>
-  filter(era == "old_rules", !is.na(epa)) |>
-  group_by(season, team = defteam) |>
-  summarise(
-    ko_coverage_epa = -mean(epa, na.rm = TRUE),   # flip: lower opp EPA = better
-    ko_coverage_n   = n(),
-    .groups = "drop"
+# =============================================================================
+# Kickoff opponent adjustment: coverage vs. return quality
+#
+# Two-way feols on LIVE returns only (touchbacks excluded from both sides).
+# posteam FE = return team quality adjusted for coverage team faced.
+# defteam FE = coverage team quality adjusted for return team faced.
+# Same model, mutually adjusted — feols solves both simultaneously.
+#
+# Ridge shrinkage k=50:
+#   2025 era  (~72/team): 72/122 = 59% retention
+#   2015-2023 (~36/team): 36/86  = 42% retention — more shrinkage for thin samples
+# =============================================================================
+
+K_RIDGE_KO <- 50L
+
+fe_tibble <- function(model, fe_name, out_col) {
+  if (is.null(model)) {
+    return(tibble(team = character(), !!sym(out_col) := numeric()))
+  }
+  fixef(model)[[fe_name]] |>
+    tibble::enframe(name = "team", value = out_col)
+}
+
+ko_opp_adj <- map_dfr(sort(unique(ko_plays$season)), function(szn) {
+  dat <- ko_plays |>
+    filter(season == szn, is_touchback == 0, !is.na(epa)) |>
+    mutate(is_home = as.integer(posteam_type == "home"))
+
+  if (nrow(dat) < 30) {
+    cli::cli_alert_warning("KO {szn}: {nrow(dat)} live returns, skipping feols")
+    return(tibble(season = szn, team = character(),
+                  ko_ret_adj = numeric(), ko_cov_adj = numeric()))
+  }
+
+  mod <- tryCatch(
+    feols(epa ~ is_home | posteam + defteam, data = dat,
+          cluster = ~game_id, warn = FALSE, notes = FALSE),
+    error = function(e) {
+      cli::cli_alert_warning("KO feols {szn} failed: {conditionMessage(e)}")
+      NULL
+    }
   )
 
-ko_coverage_new <- ko_plays |>
-  filter(era == "new_rules", !is.na(epa)) |>
-  group_by(season, team = defteam) |>
-  summarise(
-    ko_coverage_epa = -mean(epa, na.rm = TRUE),
-    ko_coverage_n   = n(),
-    .groups = "drop"
-  )
+  ret_fe <- fe_tibble(mod, "posteam", "ko_ret_adj")
+  cov_fe <- fe_tibble(mod, "defteam", "ko_cov_raw") |>
+    mutate(ko_cov_adj = -ko_cov_raw) |> select(-ko_cov_raw)
 
-ko_coverage <- bind_rows(ko_coverage_old, ko_coverage_new)
+  ret_counts <- dat |> group_by(team = posteam) |> summarise(n = n(), .groups = "drop")
+  cov_counts <- dat |> group_by(team = defteam) |> summarise(n = n(), .groups = "drop")
 
-cli::cli_h2("Top 10 kickoff coverage seasons (all eras)")
-ko_coverage |>
-  slice_max(ko_coverage_epa, n = 10) |>
-  mutate(across(where(is.numeric), \(x) round(x, 3))) |>
+  ret_fe <- ret_fe |>
+    left_join(ret_counts, by = "team") |>
+    mutate(ko_ret_adj = ko_ret_adj * coalesce(n, 0L) / (coalesce(n, 0L) + K_RIDGE_KO)) |>
+    select(-n)
+
+  cov_fe <- cov_fe |>
+    left_join(cov_counts, by = "team") |>
+    mutate(ko_cov_adj = ko_cov_adj * coalesce(n, 0L) / (coalesce(n, 0L) + K_RIDGE_KO)) |>
+    select(-n)
+
+  full_join(ret_fe, cov_fe, by = "team") |> mutate(season = szn)
+})
+
+cli::cli_h2("Top 10 kickoff coverage seasons (opp-adjusted)")
+ko_opp_adj |>
+  filter(!is.na(ko_cov_adj)) |>
+  slice_max(ko_cov_adj, n = 10) |>
+  mutate(across(where(is.numeric), \(x) round(x, 4))) |>
   print()
-
-# Kickoff return quality: how well does this team RETURN kicks?
-# posteam = receiving/return team. Higher EPA = better return unit.
-ko_return <- ko_plays |>
-  filter(!is.na(epa), is_touchback == 0L) |>   # only plays with actual returns
-  group_by(season, team = posteam) |>
-  summarise(
-    ko_return_epa = mean(epa, na.rm = TRUE),
-    ko_return_n   = n(),
-    .groups = "drop"
-  )
 
 # Pre-2024 kicking quality (leg strength era): touchback rate from kicking team
 # defteam = kicking team. Higher touchback rate = stronger leg = better for kicker.
@@ -374,7 +406,30 @@ ko_kicking_old <- ko_plays |>
 
 cli::cli_h1("4. Return ratings")
 
-# Punt returns
+# =============================================================================
+# Punt opponent adjustment: asymmetric two-stage approach
+#
+# Coverage model (all plays, including fair catches / downed / OOB):
+#   feols(epa ~ is_home | posteam + defteam)
+#   defteam FE = coverage quality INCLUDING credit for forcing fair catches.
+#   Fair catch = coverage team won the field-position battle through hang time
+#   and speed; the kicking team deserves that credit.
+#
+# Return quality (live returns only, return_yards > 0):
+#   Two-stage: adjust each play's EPA by coverage team's FE from the all-plays
+#   model, then mean the adjusted EPA by posteam.
+#   Return teams facing great coverage teams get an upward adjustment —
+#   they are not penalized for fair catches, and they get credit for even
+#   returning against a team that forces high fair-catch rates.
+#
+# Ridge shrinkage:
+#   k=20 for coverage (~65-80 plays/team → ~76% retention)
+#   k=10 for returns  (~22-30 plays/team → ~68% retention)
+# =============================================================================
+
+K_RIDGE_PR_COV <- 20L
+K_RIDGE_PR_RET <- 10L
+
 pr_plays <- pbp |>
   filter(
     play_type == "punt",
@@ -382,23 +437,75 @@ pr_plays <- pbp |>
     coalesce(punt_blocked, 0) == 0
   )
 
-# Return team (posteam = team fielding the punt)
-pr_return <- pr_plays |>
-  group_by(season, team = posteam) |>
-  summarise(
-    pr_epa_per_ret = mean(epa, na.rm = TRUE),
-    pr_n           = n(),
-    .groups = "drop"
+# --- Coverage: feols on ALL punt plays (live returns + fair catches + downed/OOB) ---
+pr_cov_adj <- map_dfr(sort(unique(pr_plays$season)), function(szn) {
+  dat <- pr_plays |>
+    filter(season == szn) |>
+    mutate(is_home = as.integer(posteam_type == "home"))
+
+  if (nrow(dat) < 20) {
+    return(tibble(season = szn, team = character(), pr_cov_adj = numeric()))
+  }
+
+  mod <- tryCatch(
+    feols(epa ~ is_home | posteam + defteam, data = dat,
+          cluster = ~game_id, warn = FALSE, notes = FALSE),
+    error = function(e) NULL
   )
 
-# Coverage team (defteam = team that punted)
-pr_coverage <- pr_plays |>
-  group_by(season, team = defteam) |>
-  summarise(
-    pr_coverage_epa = -mean(epa, na.rm = TRUE),
-    pr_coverage_n   = n(),
-    .groups = "drop"
-  )
+  cov_fe <- fe_tibble(mod, "defteam", "pr_cov_raw") |>
+    mutate(pr_cov_adj = -pr_cov_raw) |> select(-pr_cov_raw)
+
+  cov_counts <- dat |> group_by(team = defteam) |> summarise(n = n(), .groups = "drop")
+
+  cov_fe |>
+    left_join(cov_counts, by = "team") |>
+    mutate(
+      pr_cov_adj = pr_cov_adj * coalesce(n, 0L) / (coalesce(n, 0L) + K_RIDGE_PR_COV),
+      season = szn
+    ) |>
+    select(-n)
+})
+
+# --- Return quality: live returns only, adjusted for coverage team quality ---
+# pr_cov_adj > 0 means coverage team suppressed EPA. Subtracting the coverage
+# team's (negative-convention) FE is equivalent to: epa_adj = epa + pr_cov_adj.
+# A return team facing a great coverage unit gets an upward adjustment.
+pr_ret_adj <- map_dfr(sort(unique(pr_plays$season)), function(szn) {
+  szn_cov <- pr_cov_adj |> filter(season == szn) |> select(team, pr_cov_adj)
+
+  dat <- pr_plays |>
+    filter(season == szn, return_yards > 0) |>   # live returns only
+    left_join(szn_cov, by = c("defteam" = "team")) |>
+    mutate(epa_adj = epa + coalesce(pr_cov_adj, 0))
+
+  if (nrow(dat) < 10) {
+    return(tibble(season = szn, team = character(), pr_ret_adj = numeric()))
+  }
+
+  dat |>
+    group_by(team = posteam) |>
+    summarise(pr_ret_adj = mean(epa_adj, na.rm = TRUE), n_ret = n(), .groups = "drop") |>
+    mutate(
+      pr_ret_adj = pr_ret_adj * n_ret / (n_ret + K_RIDGE_PR_RET),
+      season = szn
+    ) |>
+    select(-n_ret)
+})
+
+cli::cli_h2("Top 10 punt return seasons (opp-adjusted, live returns only)")
+pr_ret_adj |>
+  filter(!is.na(pr_ret_adj)) |>
+  slice_max(pr_ret_adj, n = 10) |>
+  mutate(across(where(is.numeric), \(x) round(x, 4))) |>
+  print()
+
+cli::cli_h2("Top 10 punt coverage seasons (opp-adjusted, all plays incl fair catches)")
+pr_cov_adj |>
+  filter(!is.na(pr_cov_adj)) |>
+  slice_max(pr_cov_adj, n = 10) |>
+  mutate(across(where(is.numeric), \(x) round(x, 4))) |>
+  print()
 
 # =============================================================================
 # 5. Combine into revised team-season ST ratings
@@ -438,20 +545,16 @@ st_ratings <- adj |>
   left_join(ko_placement_new |> select(season, team, ko_placement_vs_avg),
             by = c("season", "team")) |>
 
-  # KO coverage (all eras) — defteam = kicking team, -mean(receiving_EPA)
-  left_join(ko_coverage |> select(season, team, ko_coverage_epa),
+  # KO coverage and return: opp-adjusted feols FEs (live returns only)
+  left_join(ko_opp_adj |> select(season, team, ko_cov_adj, ko_ret_adj),
             by = c("season", "team")) |>
 
-  # KO return quality — posteam = receiving team, mean(receiving_EPA) on live returns
-  left_join(ko_return |> select(season, team, ko_return_epa),
+  # Punt coverage: opp-adjusted feols FE (all plays, incl fair catches)
+  left_join(pr_cov_adj |> select(season, team, pr_cov_adj),
             by = c("season", "team")) |>
 
-  # Punt: posteam = punting team (punts from their possession), epa from their view
-  left_join(pr_return   |> select(season, team, pr_epa_per_ret, pr_n),
-            by = c("season", "team")) |>
-
-  # Punt return quality: defteam = return team on punt plays, -mean(punting_EPA)
-  left_join(pr_coverage |> select(season, team, pr_coverage_epa, pr_coverage_n),
+  # Punt return: opp-adjusted, live returns only
+  left_join(pr_ret_adj |> select(season, team, pr_ret_adj),
             by = c("season", "team")) |>
 
   mutate(
@@ -465,16 +568,16 @@ st_ratings <- adj |>
       TRUE                       ~ coalesce(ko_touchback_vs_avg,  0) * PLACEMENT_SCALE
     ),
 
-    # KO coverage: weight 1.5x for 2024+ (new formation makes coverage primary signal)
-    ko_cov_equiv   = coalesce(ko_coverage_epa, 0) *
+    # KO coverage: opp-adjusted; weight 1.5x for 2024+ (new formation primary signal)
+    ko_cov_equiv   = coalesce(ko_cov_adj, 0) *
                        if_else(season >= NEW_RULES_SEASON, 1.5, 1.0),
 
-    # KO return: live returns only (touchbacks excluded); small sample per season
-    ko_ret_equiv   = coalesce(ko_return_epa, 0),
+    # KO return: opp-adjusted, live returns only
+    ko_ret_equiv   = coalesce(ko_ret_adj, 0),
 
-    # Punt units
-    pr_epa_equiv     = coalesce(pr_epa_per_ret,  0),
-    pr_cov_epa_equiv = coalesce(pr_coverage_epa, 0),
+    # Punt units (opp-adjusted)
+    pr_epa_equiv     = coalesce(pr_ret_adj, 0),
+    pr_cov_epa_equiv = coalesce(pr_cov_adj, 0),
 
     # Composite ST: equal-weight average of 7 sub-components
     # Weights will be tuned in predictive model (05_composite.R)
