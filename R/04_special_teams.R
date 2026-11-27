@@ -535,6 +535,23 @@ YARDS_TO_EPA       <- 0.05   # 1 yard field position ≈ 0.05 EPA
 # multiply so 1 SD (~0.05) maps to roughly 0.05 EPA — same order as other components
 PLACEMENT_SCALE    <- 1.0
 
+# League-average plays per team per season for frequency-based composite weighting.
+# Using league averages (not team-specific) removes game-script dependency:
+# a team with a great offense punts less, but their punt coverage should carry
+# the same weight as a league-average team's punt coverage.
+# Punt and KO each have 3 components (kick quality / coverage / return) that share
+# one weight (every punt play is simultaneously a punter play, a coverage play, and
+# a return play from the opposing team's perspective).
+lg_weights <- pbp |>
+  filter(!is.na(epa)) |>
+  group_by(season) |>
+  summarise(
+    w_fg   = sum(play_type == "field_goal") / 32,
+    w_punt = sum(play_type == "punt")        / 32,
+    w_ko   = sum(play_type == "kickoff")     / 32,
+    .groups = "drop"
+  )
+
 st_ratings <- adj |>
   select(season, team) |>
 
@@ -565,6 +582,9 @@ st_ratings <- adj |>
   left_join(pr_ret_adj |> select(season, team, pr_ret_adj),
             by = c("season", "team")) |>
 
+  # Frequency weights (league-average plays per team per season)
+  left_join(lg_weights, by = "season") |>
+
   mutate(
     # --- Normalize to common EPA-per-play scale ---
     fg_epa_equiv   = coalesce(fg_pae_per_att,  0) / PLAYS_PER_DRIVE,
@@ -576,9 +596,9 @@ st_ratings <- adj |>
       TRUE                       ~ coalesce(ko_touchback_vs_avg,  0) * PLACEMENT_SCALE
     ),
 
-    # KO coverage: opp-adjusted; weight 1.5x for 2024+ (new formation primary signal)
-    ko_cov_equiv   = coalesce(ko_cov_adj, 0) *
-                       if_else(season >= NEW_RULES_SEASON, 1.5, 1.0),
+    # KO coverage: opp-adjusted feols FE (no era multiplier — frequency weight
+    # already reflects the 2024+ shift toward live returns)
+    ko_cov_equiv   = coalesce(ko_cov_adj, 0),
 
     # KO return: opp-adjusted, live returns only
     ko_ret_equiv   = coalesce(ko_ret_adj, 0),
@@ -587,18 +607,22 @@ st_ratings <- adj |>
     pr_epa_equiv     = coalesce(pr_ret_adj, 0),
     pr_cov_epa_equiv = coalesce(pr_cov_adj, 0),
 
-    # Composite ST: equal-weight average of 7 sub-components
-    # Weights will be tuned in predictive model (05_composite.R)
+    # Composite ST: frequency-weighted by league-average play counts.
+    # Punt and KO each contribute 3 components that share one weight (every punt
+    # is simultaneously a punter play, a coverage play, and a return-team play).
+    # League-average weights avoid game-script dependency (a good offense punts
+    # less, but their punt coverage should not be down-weighted as a result).
     st_composite = (
-      fg_epa_equiv   +
-      punt_epa_equiv +
-      ko_kick_equiv  +
-      ko_cov_equiv   +
-      ko_ret_equiv   +
-      pr_epa_equiv   +
-      pr_cov_epa_equiv
-    ) / 7
-  )
+      fg_epa_equiv     * w_fg   +
+      punt_epa_equiv   * w_punt +
+      pr_cov_epa_equiv * w_punt +
+      pr_epa_equiv     * w_punt +
+      ko_kick_equiv    * w_ko   +
+      ko_cov_equiv     * w_ko   +
+      ko_ret_equiv     * w_ko
+    ) / (w_fg + 3 * w_punt + 3 * w_ko)
+  ) |>
+  select(-w_fg, -w_punt, -w_ko)
 
 # Center to league average = 0 within each season
 st_ratings <- st_ratings |>
